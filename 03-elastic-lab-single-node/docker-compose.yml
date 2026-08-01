@@ -1,0 +1,152 @@
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch-wolfi:${STACK_VERSION}
+    container_name: elasticsearch
+    hostname: elasticsearch
+    restart: unless-stopped
+
+    environment:
+      # Basic node and cluster configuration
+      node.name: elasticsearch
+      cluster.name: elastic-wsl-cluster
+      discovery.type: single-node
+
+      # Elasticsearch node roles
+      node.roles: master,data,ingest,remote_cluster_client
+
+      # Enable username/password security
+      xpack.security.enabled: "true"
+
+      # TLS disabled only for this local WSL lab
+      xpack.security.http.ssl.enabled: "false"
+      xpack.security.transport.ssl.enabled: "false"
+
+      # Password for the built-in elastic superuser
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
+
+      # Java heap
+      ES_JAVA_OPTS: ${ES_JAVA_OPTS}
+
+      # Bind Elasticsearch inside the container
+      network.host: 0.0.0.0
+
+    ports:
+      - "9200:9200"
+
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+
+    networks:
+      - elastic-network
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl --silent --fail --user elastic:${ELASTIC_PASSWORD} http://localhost:9200/_cluster/health > /dev/null || exit 1"
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 60s
+
+    mem_limit: 2g
+
+  setup:
+    image: docker.elastic.co/elasticsearch/elasticsearch-wolfi:${STACK_VERSION}
+    container_name: elasticsearch-setup
+    restart: "no"
+
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+    environment:
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
+      KIBANA_SYSTEM_PASSWORD: ${KIBANA_SYSTEM_PASSWORD}
+
+    networks:
+      - elastic-network
+
+    command:
+      - sh
+      - -c
+      - |
+        echo "Elasticsearch is available."
+        echo "Configuring the kibana_system password..."
+
+        status=$$(curl --silent \
+          --output /tmp/kibana-password-response \
+          --write-out "%{http_code}" \
+          --user "elastic:$${ELASTIC_PASSWORD}" \
+          --request POST \
+          "http://elasticsearch:9200/_security/user/kibana_system/_password" \
+          --header "Content-Type: application/json" \
+          --data "{\"password\":\"$${KIBANA_SYSTEM_PASSWORD}\"}")
+
+        echo "HTTP status: $$status"
+
+        if [ "$$status" = "200" ]; then
+          echo "kibana_system password configured successfully."
+          exit 0
+        else
+          echo "Failed to configure kibana_system password."
+          cat /tmp/kibana-password-response
+          exit 1
+        fi
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana-wolfi:${STACK_VERSION}
+    container_name: kibana
+    hostname: kibana
+    restart: unless-stopped
+
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      setup:
+        condition: service_completed_successfully
+
+    environment:
+      # Kibana web server
+      SERVER_NAME: kibana
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 5601
+
+      # Elasticsearch connection
+      ELASTICSEARCH_HOSTS: '["http://elasticsearch:9200"]'
+      ELASTICSEARCH_USERNAME: kibana_system
+      ELASTICSEARCH_PASSWORD: ${KIBANA_SYSTEM_PASSWORD}
+
+      # Kibana security
+      XPACK_SECURITY_ENABLED: "true"
+      XPACK_SECURITY_ENCRYPTIONKEY: ${KIBANA_SECURITY_ENCRYPTION_KEY}
+      XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY: ${KIBANA_SAVEDOBJECTS_ENCRYPTION_KEY}
+      XPACK_REPORTING_ENCRYPTIONKEY: ${KIBANA_REPORTING_ENCRYPTION_KEY}
+
+      # Disable telemetry for the local lab
+      TELEMETRY_ENABLED: "false"
+      TELEMETRY_OPTIN: "false"
+
+    ports:
+      - "5601:5601"
+
+    volumes:
+      - kibana-data:/usr/share/kibana/data
+
+    networks:
+      - elastic-network
+
+    mem_limit: 1g
+
+networks:
+  elastic-network:
+    name: elastic-network
+    driver: bridge
+
+volumes:
+  elasticsearch-data:
+    name: elasticsearch-data
+
+  kibana-data:
+    name: kibana-data
