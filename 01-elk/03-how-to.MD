@@ -4,7 +4,7 @@ This file is a running Q&A log of practical "how do I do X?" questions about Ela
 
 ---
 
-## Q01 — How to enable the Stack Monitoring dashboard in Kibana?
+## 01 — How to enable the Stack Monitoring dashboard in Kibana?
 
 ### In simple terms
 
